@@ -28,6 +28,15 @@ _WHITE  = "FFFFFF"
 _GREY   = "666666"
 
 
+try:
+    from pptx import Presentation as _Presentation
+    from pptx.util import Inches, Pt, Emu
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN
+except ImportError:
+    _Presentation = None  # type: ignore
+
+
 def render_pptx(artifact: "Artifact", path: str) -> str:
     """
     Write *artifact* to a PowerPoint presentation at *path*.
@@ -35,14 +44,8 @@ def render_pptx(artifact: "Artifact", path: str) -> str:
     If *path* is a directory the file is named after the artifact title.
     Returns the path of the written file.
     """
-    try:
-        from pptx import Presentation
-        from pptx.util import Inches, Pt, Emu
-        from pptx.dml.color import RGBColor
-        from pptx.enum.text import PP_ALIGN
-        from pptx.util import Inches, Pt
-    except ImportError:
-        raise ImportError(_MISSING) from None
+    if _Presentation is None:
+        raise ImportError(_MISSING)
 
     from xybernetex._export._markdown import parse, inline_text
     from xybernetex._models import _safe_filename
@@ -50,7 +53,7 @@ def render_pptx(artifact: "Artifact", path: str) -> str:
     dest = _resolve_path(path, artifact.title, ".pptx")
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    prs = Presentation()
+    prs = _Presentation()
     prs.slide_width  = Inches(13.33)
     prs.slide_height = Inches(7.5)
 
@@ -102,8 +105,6 @@ def render_pptx(artifact: "Artifact", path: str) -> str:
 # ── Slide builder ──────────────────────────────────────────────────────────────
 
 def _add_content_slide(prs, layout, title: str, blocks: list[dict]) -> None:
-    from pptx.util import Inches, Pt
-
     slide = prs.slides.add_slide(layout)
     _fill_background(slide, _LIGHT)
 
@@ -170,9 +171,6 @@ def _blocks_to_bullet_lines(blocks: list[dict]) -> list[tuple[str, int]]:
 
 
 def _populate_text_frame(tf, lines: list[tuple[str, int]]) -> None:
-    from pptx.util import Pt
-    from pptx.dml.color import RGBColor
-
     first = True
     for text, level in lines:
         if first:
@@ -189,9 +187,6 @@ def _populate_text_frame(tf, lines: list[tuple[str, int]]) -> None:
 
 
 def _add_pptx_table(slide, block: dict, left, top, width, height) -> None:
-    from pptx.util import Pt
-    from pptx.dml.color import RGBColor
-
     headers  = block["headers"]
     rows     = block["rows"]
     if not headers:
@@ -218,9 +213,6 @@ def _add_pptx_table(slide, block: dict, left, top, width, height) -> None:
 
 
 def _style_cell(cell, bg: str, fg: str, bold: bool, size) -> None:
-    from pptx.dml.color import RGBColor
-    from pptx.util import Pt
-
     cell.fill.solid()
     cell.fill.fore_color.rgb = RGBColor.from_string(bg)
     for para in cell.text_frame.paragraphs:
@@ -233,7 +225,6 @@ def _style_cell(cell, bg: str, fg: str, bold: bool, size) -> None:
 # ── Drawing helpers ────────────────────────────────────────────────────────────
 
 def _fill_background(slide, hex_color: str) -> None:
-    from pptx.dml.color import RGBColor
     background = slide.background
     fill = background.fill
     fill.solid()
@@ -241,8 +232,6 @@ def _fill_background(slide, hex_color: str) -> None:
 
 
 def _add_rect(slide, left, top, width, height, color: str) -> None:
-    from pptx.util import Emu
-    from pptx.dml.color import RGBColor
     shape = slide.shapes.add_shape(1, left, top, width, height)  # MSO_SHAPE_TYPE.RECTANGLE = 1
     shape.fill.solid()
     shape.fill.fore_color.rgb = RGBColor.from_string(color)
@@ -254,9 +243,6 @@ def _add_text_box(
     left, top, width, height,
     font_size, bold: bool, color: str, align: str,
 ) -> None:
-    from pptx.dml.color import RGBColor
-    from pptx.enum.text import PP_ALIGN
-
     txBox = slide.shapes.add_textbox(left, top, width, height)
     tf = txBox.text_frame
     tf.word_wrap = True
@@ -272,7 +258,7 @@ def _add_text_box(
 # ── Path helper ────────────────────────────────────────────────────────────────
 
 def _resolve_path(path: str, title: str, ext: str) -> Path:
-    from xybernetex._models import _safe_filename
+    from xybernetex._models import _safe_filename  # local: only needed here
     p = Path(path)
     if p.is_dir():
         p = p / f"{_safe_filename(title)}{ext}"

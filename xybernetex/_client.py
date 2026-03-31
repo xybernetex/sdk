@@ -67,13 +67,21 @@ class Run:
         self.completed_at: Optional[str] = data.get("completed_at")
         self.step_count: int = int(data.get("step_count") or 0)
         self.artifact_count: int = int(data.get("artifact_count") or 0)
+        self.tool_count: int = int(data.get("tool_count") or 0)
         self.worker: Optional[str] = data.get("worker")
         self.conclusion: Optional[str] = data.get("conclusion")
         self.report_md: Optional[str] = data.get("report_md")
         self.error: Optional[str] = data.get("error")
+        self.tools: List[Any] = list(data.get("tools") or [])
+        self.capability_manifest: Optional[dict[str, Any]] = data.get("capability_manifest")
         self.artifacts: List[Artifact] = [
             _artifact_from_dict(a) for a in (data.get("artifacts") or [])
         ]
+
+    @property
+    def text(self) -> str:
+        """Return the most useful text output for the completed run."""
+        return self.report_md or self.conclusion or ""
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -199,7 +207,7 @@ class Run:
             elif event_type == "step":
                 self.step_count = event.step_number or self.step_count
             elif event_type == "artifact":
-                self.artifact_count = (event.artifact_id or 0)
+                self.artifact_count += 1
 
             yield event
             if event_type in _TERMINAL:
@@ -222,24 +230,91 @@ class RunsResource:
     def __init__(self, client: "Client"):
         self._client = client
 
-    def create(self, goal: str, *, model: str = "llama70b") -> Run:
+    def create(
+        self,
+        goal: str,
+        *,
+        model: str = "cloudflare",
+        tools: Optional[List[Any]] = None,
+        capability_manifest: Optional[dict[str, Any]] = None,
+        llm_provider:   Optional[str] = None,
+        llm_api_key:    Optional[str] = None,
+        llm_model:      Optional[str] = None,
+        cf_account_id:  Optional[str] = None,
+        cf_api_token:   Optional[str] = None,
+        tavily_api_key: Optional[str] = None,
+        resend_api_key: Optional[str] = None,
+    ) -> Run:
         """
         Submit a new agent run.
 
         Args:
             goal:  The task description for the agent.
-            model: LLM model key — ``"llama"`` (default), ``"llama70b"``,
-                   ``"mistral"``, or ``"qwen"``.
+            model: LLM provider — ``"cloudflare"`` (default), ``"openai"``,
+                   ``"anthropic"``, ``"gemini"``, or ``"mistral"``.
+            tools: Optional tool names or tool descriptor dicts allowed for this run.
+            capability_manifest: Optional full per-run capability manifest.
+            llm_provider:   Override provider (same values as model).
+            llm_api_key:    API key for the chosen LLM provider.
+            llm_model:      Override the default model ID for the provider.
+            cf_account_id:  Cloudflare account ID (cloudflare provider only).
+            cf_api_token:   Cloudflare API token (cloudflare provider only).
+            tavily_api_key: Tavily web search API key.
+            resend_api_key: Resend email API key.
 
         Returns:
             A :class:`Run` object with ``status="queued"``.
         """
         stub = self._client._request(
-            "POST", "/runs", json={"goal": goal, "model": model}
+            "POST",
+            "/runs",
+            json=_build_run_payload(
+                goal,
+                model=model,
+                tools=tools,
+                capability_manifest=capability_manifest,
+                llm_provider=llm_provider,
+                llm_api_key=llm_api_key,
+                llm_model=llm_model,
+                cf_account_id=cf_account_id,
+                cf_api_token=cf_api_token,
+                tavily_api_key=tavily_api_key,
+                resend_api_key=resend_api_key,
+            ),
         )
         # Fetch full metadata (the POST response only returns run_id + status)
         data = self._client._request("GET", f"/runs/{stub['run_id']}")
         return Run(data, _client=self._client)
+
+    def submit(
+        self,
+        goal: str,
+        *,
+        model: str = "cloudflare",
+        tools: Optional[List[Any]] = None,
+        capability_manifest: Optional[dict[str, Any]] = None,
+        llm_provider:   Optional[str] = None,
+        llm_api_key:    Optional[str] = None,
+        llm_model:      Optional[str] = None,
+        cf_account_id:  Optional[str] = None,
+        cf_api_token:   Optional[str] = None,
+        tavily_api_key: Optional[str] = None,
+        resend_api_key: Optional[str] = None,
+    ) -> Run:
+        """Friendly alias for :meth:`create`."""
+        return self.create(
+            goal,
+            model=model,
+            tools=tools,
+            capability_manifest=capability_manifest,
+            llm_provider=llm_provider,
+            llm_api_key=llm_api_key,
+            llm_model=llm_model,
+            cf_account_id=cf_account_id,
+            cf_api_token=cf_api_token,
+            tavily_api_key=tavily_api_key,
+            resend_api_key=resend_api_key,
+        )
 
     def get(self, run_id: str) -> Run:
         """Fetch a run by ID."""
@@ -297,6 +372,52 @@ class Client:
 
         self.runs = RunsResource(self)
 
+    def run(
+        self,
+        goal: str,
+        *,
+        model: str = "cloudflare",
+        tools: Optional[List[Any]] = None,
+        capability_manifest: Optional[dict[str, Any]] = None,
+        llm_provider:   Optional[str] = None,
+        llm_api_key:    Optional[str] = None,
+        llm_model:      Optional[str] = None,
+        cf_account_id:  Optional[str] = None,
+        cf_api_token:   Optional[str] = None,
+        tavily_api_key: Optional[str] = None,
+        resend_api_key: Optional[str] = None,
+        wait: bool = True,
+        poll_interval: float = 5.0,
+        timeout: Optional[float] = None,
+        raise_on_failure: bool = True,
+    ) -> Run:
+        """
+        Submit a goal with one call.
+
+        By default this blocks until completion. Pass ``wait=False`` to get
+        the live run handle immediately for streaming or manual polling.
+        """
+        run = self.runs.submit(
+            goal,
+            model=model,
+            tools=tools,
+            capability_manifest=capability_manifest,
+            llm_provider=llm_provider,
+            llm_api_key=llm_api_key,
+            llm_model=llm_model,
+            cf_account_id=cf_account_id,
+            cf_api_token=cf_api_token,
+            tavily_api_key=tavily_api_key,
+            resend_api_key=resend_api_key,
+        )
+        if wait:
+            return run.wait(
+                poll_interval=poll_interval,
+                timeout=timeout,
+                raise_on_failure=raise_on_failure,
+            )
+        return run
+
     # ── Internal HTTP helpers ──────────────────────────────────────────────────
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Any:
@@ -317,6 +438,16 @@ class Client:
         """Check API and Redis connectivity."""
         return self._request("GET", "/health")
 
+    def close(self) -> None:
+        """Close the underlying HTTP session."""
+        self._session.close()
+
+    def __enter__(self) -> "Client":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
+
     def __repr__(self) -> str:
         return f"Client(base_url={self._base_url!r})"
 
@@ -328,3 +459,39 @@ def _raise_for_status(resp: requests.Response) -> None:
         raise NotFoundError(404, resp.text[:200])
     if not resp.ok:
         raise APIError(resp.status_code, resp.text[:200])
+
+
+def _build_run_payload(
+    goal: str,
+    *,
+    model: str,
+    tools: Optional[List[Any]] = None,
+    capability_manifest: Optional[dict[str, Any]] = None,
+    llm_provider:   Optional[str] = None,
+    llm_api_key:    Optional[str] = None,
+    llm_model:      Optional[str] = None,
+    cf_account_id:  Optional[str] = None,
+    cf_api_token:   Optional[str] = None,
+    tavily_api_key: Optional[str] = None,
+    resend_api_key: Optional[str] = None,
+) -> dict[str, Any]:
+    if tools is not None and capability_manifest is not None:
+        raise ValueError("Provide either tools or capability_manifest, not both.")
+    payload: dict[str, Any] = {"goal": goal, "model": model}
+    if tools is not None:
+        payload["tools"] = tools
+    if capability_manifest is not None:
+        payload["capability_manifest"] = capability_manifest
+    # Only include credential fields if provided — avoids sending empty strings
+    for key, val in [
+        ("llm_provider",   llm_provider),
+        ("llm_api_key",    llm_api_key),
+        ("llm_model",      llm_model),
+        ("cf_account_id",  cf_account_id),
+        ("cf_api_token",   cf_api_token),
+        ("tavily_api_key", tavily_api_key),
+        ("resend_api_key", resend_api_key),
+    ]:
+        if val:
+            payload[key] = val
+    return payload

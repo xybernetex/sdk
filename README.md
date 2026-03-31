@@ -89,7 +89,8 @@ client = Client(
 
 ## Quick Start
 
-Submit a goal and block until the agent finishes. The `wait()` call polls the API and returns once the run reaches a terminal state.
+Submit a goal and block until the agent finishes. The fastest path is a single
+call to `client.run(...)`, which waits by default and returns a completed run.
 
 ```python
 import os
@@ -97,21 +98,55 @@ from xybernetex import Client, RunFailedError
 
 client = Client(api_key=os.environ["XYBERNETEX_API_KEY"])
 
-run = client.runs.submit(
-    goal="Research the top five open-source LLM frameworks and summarize their trade-offs.",
+result = client.run(
+    "Research the top five open-source LLM frameworks and summarize their trade-offs.",
     model="llama70b",
+    timeout=300.0,
 )
 
-print(f"Run started: {run.run_id}")
-print(f"Status: {run.status}")
-
-run = run.wait(poll_interval=2.0, timeout=300.0)
-
-print(f"Finished with status: {run.status}")
-print(f"Goal: {run.goal}")
+print(f"Finished with status: {result.status}")
+print(result.text)
 ```
 
 After `wait()` returns you can access any artifacts produced during the run (see [Artifact Export](#artifact-export)).
+
+If you want the live run handle immediately for streaming or manual polling, use
+`wait=False`:
+
+```python
+run = client.run(
+    "Write a Python script that fetches the current Bitcoin price.",
+    model="llama70b",
+    wait=False,
+)
+```
+
+You can also declare the tools a run is allowed to use up front:
+
+```python
+run = client.run(
+    "Draft a customer follow-up email and send it if the tone is professional.",
+    tools=[
+        {"name": "email", "actions": ["draft", "send"], "risk": "external_write"},
+        {"name": "crm", "actions": ["lookup"], "risk": "internal_read", "read_only": True},
+    ],
+    wait=False,
+)
+```
+
+If you already have a full per-run policy, pass a capability manifest instead:
+
+```python
+run = client.runs.submit(
+    goal="Review the account and send the escalation note if needed.",
+    capability_manifest={
+        "tools": [
+            {"name": "crm", "actions": ["lookup"], "risk": "internal_read", "read_only": True},
+            {"name": "email", "actions": ["send"], "risk": "external_write"},
+        ]
+    },
+)
+```
 
 ---
 
@@ -322,6 +357,13 @@ Pass the model ID string to `runs.submit()`:
 ```python
 run = client.runs.submit(goal="Translate this contract to French.", model="qwen")
 ```
+
+Tool permissions are optional and are declared at submit time with either:
+
+- `tools=[...]` for a short allow-list of tool names or descriptors
+- `capability_manifest={...}` for a full per-run tool policy
+
+Pass one or the other, not both.
 
 ---
 
@@ -632,7 +674,7 @@ Client(api_key: str, base_url: str = "https://api.xybernetex.com")
 
 | Member | Signature | Returns | Description |
 |---|---|---|---|
-| `client.runs.submit` | `(goal: str, model: str = "llama70b") -> Run` | `Run` | Submit a new agent run |
+| `client.runs.submit` | `(goal: str, model: str = "llama70b", tools: list \| None = None, capability_manifest: dict \| None = None) -> Run` | `Run` | Submit a new agent run with optional tool permissions |
 
 ---
 
@@ -646,6 +688,9 @@ Returned by `Client.runs.submit()`.
 | `run.status` | `str` | Current status: `"pending"`, `"running"`, `"completed"`, `"failed"`, `"cancelled"` |
 | `run.goal` | `str` | The goal string submitted |
 | `run.model` | `str` | Model used for this run |
+| `run.tools` | `list` | Declared tool descriptors for this run, when provided |
+| `run.capability_manifest` | `dict \| None` | Full per-run capability manifest, when provided |
+| `run.tool_count` | `int` | Number of declared tools visible to this run |
 | `run.wait(poll_interval, timeout)` | `(float = 2.0, float \| None = None) -> Run` | Block until terminal state; raises `RunFailedError` on failure |
 | `run.stream()` | `() -> Iterator[Event] \| None` | Return SSE event iterator, or `None` if unavailable |
 | `run.cancel()` | `() -> None` | Request cancellation of this run |
@@ -660,7 +705,7 @@ AsyncClient(api_key: str, base_url: str = "https://api.xybernetex.com")
 
 | Member | Signature | Returns | Description |
 |---|---|---|---|
-| `await client.runs.submit` | `(goal: str, model: str = "llama70b") -> AsyncRun` | `AsyncRun` | Submit a new agent run asynchronously |
+| `await client.runs.submit` | `(goal: str, model: str = "llama70b", tools: list \| None = None, capability_manifest: dict \| None = None) -> AsyncRun` | `AsyncRun` | Submit a new agent run asynchronously with optional tool permissions |
 
 ---
 

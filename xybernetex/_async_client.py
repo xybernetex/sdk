@@ -18,6 +18,7 @@ from xybernetex._client import (
     RunFailedError,
     XybernetexError,
     _TERMINAL,
+    _build_run_payload,
 )
 
 
@@ -118,13 +119,21 @@ class AsyncRun:
         self.completed_at: Optional[str] = data.get("completed_at")
         self.step_count: int = int(data.get("step_count") or 0)
         self.artifact_count: int = int(data.get("artifact_count") or 0)
+        self.tool_count: int = int(data.get("tool_count") or 0)
         self.worker: Optional[str] = data.get("worker")
         self.conclusion: Optional[str] = data.get("conclusion")
         self.report_md: Optional[str] = data.get("report_md")
         self.error: Optional[str] = data.get("error")
+        self.tools: List[Any] = list(data.get("tools") or [])
+        self.capability_manifest: Optional[dict[str, Any]] = data.get("capability_manifest")
         self.artifacts: List[Artifact] = [
             _artifact_from_dict(a) for a in (data.get("artifacts") or [])
         ]
+
+    @property
+    def text(self) -> str:
+        """Return the most useful text output for the completed run."""
+        return self.report_md or self.conclusion or ""
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -154,9 +163,9 @@ class AsyncRun:
             timeout: Maximum seconds to wait.
             raise_on_failure: Raises ``RunFailedError`` on failed runs.
         """
-        deadline = (asyncio.get_event_loop().time() + timeout) if timeout else None
+        deadline = (asyncio.get_running_loop().time() + timeout) if timeout else None
         while self.status not in _TERMINAL:
-            if deadline and asyncio.get_event_loop().time() > deadline:
+            if deadline and asyncio.get_running_loop().time() > deadline:
                 raise TimeoutError(
                     f"Run {self.run_id} did not complete within {timeout}s"
                 )
@@ -244,7 +253,7 @@ class AsyncRun:
                     elif event_type == "step":
                         self.step_count = event.step_number or self.step_count
                     elif event_type == "artifact":
-                        self.artifact_count = event.artifact_id or 0
+                        self.artifact_count += 1
 
                     yield event
                     if event_type in _TERMINAL:
@@ -265,13 +274,71 @@ class AsyncRunsResource:
     def __init__(self, client: "AsyncClient"):
         self._client = client
 
-    async def create(self, goal: str, *, model: str = "llama70b") -> AsyncRun:
+    async def create(
+        self,
+        goal: str,
+        *,
+        model: str = "cloudflare",
+        tools: Optional[List[Any]] = None,
+        capability_manifest: Optional[dict[str, Any]] = None,
+        llm_provider:   Optional[str] = None,
+        llm_api_key:    Optional[str] = None,
+        llm_model:      Optional[str] = None,
+        cf_account_id:  Optional[str] = None,
+        cf_api_token:   Optional[str] = None,
+        tavily_api_key: Optional[str] = None,
+        resend_api_key: Optional[str] = None,
+    ) -> AsyncRun:
         """Submit a new agent run and return an :class:`AsyncRun`."""
         stub = await self._client._request(
-            "POST", "/runs", json={"goal": goal, "model": model}
+            "POST",
+            "/runs",
+            json=_build_run_payload(
+                goal,
+                model=model,
+                tools=tools,
+                capability_manifest=capability_manifest,
+                llm_provider=llm_provider,
+                llm_api_key=llm_api_key,
+                llm_model=llm_model,
+                cf_account_id=cf_account_id,
+                cf_api_token=cf_api_token,
+                tavily_api_key=tavily_api_key,
+                resend_api_key=resend_api_key,
+            ),
         )
         data = await self._client._request("GET", f"/runs/{stub['run_id']}")
         return AsyncRun(data, _client=self._client)
+
+    async def submit(
+        self,
+        goal: str,
+        *,
+        model: str = "cloudflare",
+        tools: Optional[List[Any]] = None,
+        capability_manifest: Optional[dict[str, Any]] = None,
+        llm_provider:   Optional[str] = None,
+        llm_api_key:    Optional[str] = None,
+        llm_model:      Optional[str] = None,
+        cf_account_id:  Optional[str] = None,
+        cf_api_token:   Optional[str] = None,
+        tavily_api_key: Optional[str] = None,
+        resend_api_key: Optional[str] = None,
+    ) -> AsyncRun:
+        """Friendly alias for :meth:`create`."""
+        return await self.create(
+            goal,
+            model=model,
+            tools=tools,
+            capability_manifest=capability_manifest,
+            llm_provider=llm_provider,
+            llm_api_key=llm_api_key,
+            llm_model=llm_model,
+            cf_account_id=cf_account_id,
+            cf_api_token=cf_api_token,
+            tavily_api_key=tavily_api_key,
+            resend_api_key=resend_api_key,
+        )
 
     async def get(self, run_id: str) -> AsyncRun:
         """Fetch a run by ID."""
@@ -322,6 +389,52 @@ class AsyncClient:
         self._timeout = timeout
         self._http: Optional[httpx.AsyncClient] = None
         self.runs = AsyncRunsResource(self)
+
+    async def run(
+        self,
+        goal: str,
+        *,
+        model: str = "cloudflare",
+        tools: Optional[List[Any]] = None,
+        capability_manifest: Optional[dict[str, Any]] = None,
+        llm_provider:   Optional[str] = None,
+        llm_api_key:    Optional[str] = None,
+        llm_model:      Optional[str] = None,
+        cf_account_id:  Optional[str] = None,
+        cf_api_token:   Optional[str] = None,
+        tavily_api_key: Optional[str] = None,
+        resend_api_key: Optional[str] = None,
+        wait: bool = True,
+        poll_interval: float = 5.0,
+        timeout: Optional[float] = None,
+        raise_on_failure: bool = True,
+    ) -> AsyncRun:
+        """
+        Submit a goal with one call.
+
+        By default this awaits completion. Pass ``wait=False`` to get the live
+        run handle immediately for streaming or manual polling.
+        """
+        run = await self.runs.submit(
+            goal,
+            model=model,
+            tools=tools,
+            capability_manifest=capability_manifest,
+            llm_provider=llm_provider,
+            llm_api_key=llm_api_key,
+            llm_model=llm_model,
+            cf_account_id=cf_account_id,
+            cf_api_token=cf_api_token,
+            tavily_api_key=tavily_api_key,
+            resend_api_key=resend_api_key,
+        )
+        if wait:
+            return await run.wait(
+                poll_interval=poll_interval,
+                timeout=timeout,
+                raise_on_failure=raise_on_failure,
+            )
+        return run
 
     async def _get_http(self) -> httpx.AsyncClient:
         if self._http is None or self._http.is_closed:

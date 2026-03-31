@@ -61,6 +61,9 @@ Optional export dependencies::
     pip install xybernetex[pptx]   # PowerPoint presentations
     pip install xybernetex[all]    # Everything
 """
+from __future__ import annotations
+
+from typing import Any, Optional
 
 from xybernetex._client import (
     APIError,
@@ -78,7 +81,45 @@ from xybernetex._async_client import (
 )
 from xybernetex._models import Artifact, Event
 
+
+def run(
+    goal: str,
+    *,
+    api_key: Optional[str] = None,
+    base_url: str = "http://localhost:8000",
+    model: str = "llama70b",
+    tools: list[Any] | None = None,
+    capability_manifest: dict[str, Any] | None = None,
+    poll_interval: float = 5.0,
+    timeout: float | None = None,
+    request_timeout: float = 30.0,
+    raise_on_failure: bool = True,
+) -> Run:
+    """
+    The simplest blocking SDK entrypoint.
+
+    This is the easiest "just do the work" path: create a client, submit the
+    goal, wait for completion, and return the finished run.
+    """
+    with Client(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=request_timeout,
+    ) as client:
+        return client.run(
+            goal,
+            model=model,
+            tools=tools,
+            capability_manifest=capability_manifest,
+            wait=True,
+            poll_interval=poll_interval,
+            timeout=timeout,
+            raise_on_failure=raise_on_failure,
+        )
+
 __all__ = [
+    # Top-level helpers
+    "run",
     # Clients
     "Client",
     "AsyncClient",
