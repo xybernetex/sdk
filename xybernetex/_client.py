@@ -208,6 +208,10 @@ class Run:
                 self.step_count = event.step_number or self.step_count
             elif event_type == "artifact":
                 self.artifact_count += 1
+                # Build a live Artifact object so run.artifacts is populated
+                # during streaming without needing a refresh() call.
+                if event.data.get("content"):
+                    self.artifacts.append(_artifact_from_dict(event.data))
 
             yield event
             if event_type in _TERMINAL:

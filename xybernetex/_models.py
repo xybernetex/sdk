@@ -52,6 +52,10 @@ class Event:
         return self.data.get("preview")
 
     @property
+    def content(self) -> Optional[str]:
+        return self.data.get("content")
+
+    @property
     def conclusion(self) -> Optional[str]:
         return self.data.get("conclusion")
 
